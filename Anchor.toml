@@ -7,6 +7,7 @@ skip-lint = false
 
 [programs.localnet]
 contracts = "9xpLht8FtpZgEGFpHpC6W3pupoHbfTsBMytj7CqxJ8us"
+ai_vault = "AiVau1tSo1obankAiVau1tSo1obankAiVau1tSo1o"
 
 [registry]
 url = "https://api.apr.dev"
