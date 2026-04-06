@@ -164,7 +164,7 @@ data the on-chain program enforced.
 | Program | Program ID |
 |---|---|
 | `contracts` (Treasury) | `9xpLht8FtpZgEGFpHpC6W3pupoHbfTsBMytj7CqxJ8us` |
-| `ai_vault` | `AiVau1tSo1obankAiVau1tSo1obankAiVau1tSo1o` |
+| `ai_vault` | `74Er4xSaRKQbDL1X8UUjYP9M4vXNZUZR36qeMUdH7RU9` (devnet) |
 
 ## License
 
