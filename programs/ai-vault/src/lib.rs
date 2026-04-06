@@ -19,7 +19,7 @@ use anchor_spl::token_interface::{
     self, Mint, TokenAccount, TokenInterface, TransferChecked,
 };
 
-declare_id!("AiVau1tSo1obankAiVau1tSo1obankAiVau1tSo1o");
+declare_id!("74Er4xSaRKQbDL1X8UUjYP9M4vXNZUZR36qeMUdH7RU9");
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
