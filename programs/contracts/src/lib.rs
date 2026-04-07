@@ -376,7 +376,7 @@ pub struct RecordAiDecision<'info> {
         init,
         payer = ai_oracle,
         space = 8 + AiDecision::INIT_SPACE,
-        seeds = [b"ai-decision", &config.total_ai_decisions.to_le_bytes()],
+        seeds = [b"ai-decision".as_ref(), config.total_ai_decisions.to_le_bytes().as_ref()],
         bump,
     )]
     pub decision: Account<'info, AiDecision>,
