@@ -109,29 +109,51 @@ The on-chain program rejects any decision with `confidence < 70`
 
 Run modes: `pnpm dev` (loop, default 15 min), `pnpm once` (single tick).
 
-## Quickstart
+## Quickstart (devnet)
 
 ```bash
 git clone https://github.com/solobank-ai/contracts.git
 cd contracts
 yarn install
 
-# 1. Build both programs
+# 1. Point Solana CLI at devnet and fund the deploy wallet
+solana config set --url https://api.devnet.solana.com
+solana airdrop 2
+
+# 2. Build both programs
 anchor build
 
-# 2. Run the test suite (proves contracts work end-to-end)
+# 3. Run the test suite (proves contracts work end-to-end against localnet)
 anchor test
 
-# 3. Deploy to devnet (one time)
+# 4. Deploy to devnet
 anchor deploy --provider.cluster devnet
 
-# 4. Deterministic demo tick — no OpenAI key needed
+# 5. Initialise an AI Vault for devnet USDC (one time, by the admin)
+#    See agent/scripts/init-vault.ts (or use the SDK directly).
+
+# 6. Deterministic demo tick — no OpenAI key needed
 cd agent
 pnpm install
 cp .env.example .env   # fill in oracle keypair + program id
 pnpm tsx scripts/demo-tick.ts allocate
-# → prints a Solscan link to the on-chain decision
+# → prints a Solscan devnet link to the on-chain decision
 ```
+
+The reserved devnet program ID is
+[`74Er4xSaRKQbDL1X8UUjYP9M4vXNZUZR36qeMUdH7RU9`](https://solscan.io/account/74Er4xSaRKQbDL1X8UUjYP9M4vXNZUZR36qeMUdH7RU9?cluster=devnet)
+— hard-coded in `Anchor.toml`, `programs/ai-vault/src/lib.rs` (`declare_id!`),
+the agent `.env.example`, and `@solobank/sdk` (`AI_VAULT_PROGRAM_ID`).
+
+## End-user surfaces
+
+Once deployed, every wallet talks to the vault via:
+
+| Surface | Command / tool |
+|---|---|
+| CLI | `solobank vault info` / `position` / `deposit <amount>` / `withdraw <shares>` / `decisions` |
+| MCP (Claude / agents) | `solobank_vault_info`, `solobank_vault_position`, `solobank_vault_decisions`, `solobank_vault_deposit`, `solobank_vault_withdraw` |
+| SDK | `import { vaultDeposit, vaultWithdraw, getVault, getRecentDecisions } from '@solobank/sdk'` |
 
 ## Live demo
 
@@ -139,8 +161,8 @@ After running the demo tick the agent prints a link like:
 
 ```
 ✓ confirmed
-Signature: 5mRx3kLpAiVau1tDemoTickSignaturE4vGh8mKp...
-Solscan  : https://solscan.io/tx/5mRx...?cluster=devnet
+Signature: <devnet tx signature>
+Solscan  : https://solscan.io/tx/<sig>?cluster=devnet
 ```
 
 Open it. You'll see the `AiDecision` PDA being created with the exact
