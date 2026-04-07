@@ -568,7 +568,7 @@ pub struct AiOracleAction<'info> {
         seeds = [
             DECISION_SEED,
             vault.key().as_ref(),
-            &vault.total_ai_decisions.to_le_bytes(),
+            vault.total_ai_decisions.to_le_bytes().as_ref(),
         ],
         bump,
     )]
