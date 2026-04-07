@@ -5,6 +5,8 @@
 // reasoning text is hashed (SHA-256) and the resulting decision is signed
 // by the oracle keypair and submitted to the on-chain ai_vault program.
 //
+// Built on @solana/kit — no @solana/web3.js anywhere.
+//
 // Run modes:
 //   pnpm dev          → infinite loop, every INTERVAL_SECONDS
 //   pnpm once         → single tick, then exit (useful for cron / demos)
@@ -13,14 +15,29 @@ import "dotenv/config";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
-  Connection,
-  Keypair,
-  PublicKey,
-  SystemProgram,
-  Transaction,
-  TransactionInstruction,
-} from "@solana/web3.js";
-import { BN } from "@coral-xyz/anchor";
+  type Address,
+  address,
+  createSolanaRpc,
+  createSolanaRpcSubscriptions,
+  createKeyPairSignerFromBytes,
+  createTransactionMessage,
+  setTransactionMessageFeePayer,
+  setTransactionMessageLifetimeUsingBlockhash,
+  appendTransactionMessageInstructions,
+  pipe,
+  compileTransaction,
+  signTransaction,
+  getSignatureFromTransaction,
+  sendAndConfirmTransactionFactory,
+  assertIsTransactionWithinSizeLimit,
+  getProgramDerivedAddress,
+  getAddressEncoder,
+  getU64Encoder,
+  fetchEncodedAccount,
+  type KeyPairSigner,
+  type Instruction,
+  type AccountRole,
+} from "@solana/kit";
 import OpenAI from "openai";
 
 // ── Config ──────────────────────────────────────────────────────────────────
@@ -35,10 +52,16 @@ const OPENAI_KEY = env("OPENAI_API_KEY");
 const OPENAI_MODEL = env("OPENAI_MODEL", "gpt-4o-mini");
 const RPC_URL = env("SOLANA_RPC_URL", "https://api.devnet.solana.com");
 const ORACLE_KP_PATH = env("AI_ORACLE_KEYPAIR");
-const PROGRAM_ID = new PublicKey(env("AI_VAULT_PROGRAM_ID"));
-const ASSET_MINT = new PublicKey(env("VAULT_ASSET_MINT"));
+const PROGRAM_ID = address(env("AI_VAULT_PROGRAM_ID"));
+const ASSET_MINT = address(env("VAULT_ASSET_MINT"));
 const INTERVAL = Number(env("INTERVAL_SECONDS", "900"));
 const MIN_CONFIDENCE = Number(env("MIN_CONFIDENCE", "70"));
+
+const SYSTEM_PROGRAM_ADDRESS = address("11111111111111111111111111111111");
+const READONLY: AccountRole = 0 as AccountRole;
+const WRITABLE: AccountRole = 1 as AccountRole;
+const READONLY_SIGNER: AccountRole = 2 as AccountRole;
+const WRITABLE_SIGNER: AccountRole = 3 as AccountRole;
 
 // ── Strategy enum (must match on-chain) ────────────────────────────────────
 
@@ -137,152 +160,131 @@ async function askLLM(snapshot: MarketSnapshot): Promise<Decision> {
 
 // ── On-chain helpers ───────────────────────────────────────────────────────
 
-function loadKeypair(path: string): Keypair {
-  const secret = JSON.parse(readFileSync(path, "utf8")) as number[];
-  return Keypair.fromSecretKey(Uint8Array.from(secret));
+async function loadOracleSigner(path: string): Promise<KeyPairSigner> {
+  const secret = Uint8Array.from(JSON.parse(readFileSync(path, "utf8")) as number[]);
+  return createKeyPairSignerFromBytes(secret);
 }
 
-function sha256(input: string): Buffer {
-  return createHash("sha256").update(input, "utf8").digest();
+function sha256(input: string): Uint8Array {
+  const buf = createHash("sha256").update(input, "utf8").digest();
+  return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
 }
 
-function vaultPda(mint: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("vault"), mint.toBuffer()],
-    PROGRAM_ID,
-  );
+function discriminator(name: string): Uint8Array {
+  const buf = createHash("sha256").update(`global:${name}`).digest();
+  return new Uint8Array(buf.buffer, buf.byteOffset, 8);
 }
 
-function decisionPda(vault: PublicKey, decisionId: BN): [PublicKey, number] {
-  const idBuf = Buffer.alloc(8);
-  idBuf.writeBigUInt64LE(BigInt(decisionId.toString()));
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("ai-vault-decision"), vault.toBuffer(), idBuf],
-    PROGRAM_ID,
-  );
+function concatBytes(...parts: Uint8Array[]): Uint8Array {
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.length; }
+  return out;
 }
 
-// Anchor instruction discriminators (sha256("global:<name>")[..8])
-function discriminator(name: string): Buffer {
-  return createHash("sha256").update(`global:${name}`).digest().subarray(0, 8);
+function u64LE(value: bigint): Uint8Array {
+  const buf = new Uint8Array(8);
+  new DataView(buf.buffer).setBigUint64(0, value, true);
+  return buf;
 }
 
-interface BuiltIx {
-  ix: TransactionInstruction;
-  decisionPda: PublicKey;
+function readU64LE(bytes: Uint8Array, offset: number): bigint {
+  return new DataView(bytes.buffer, bytes.byteOffset + offset, 8).getBigUint64(0, true);
 }
 
-function buildAiAllocateIx(
-  vault: PublicKey,
-  decisionId: BN,
-  oracle: PublicKey,
-  payer: PublicKey,
-  targetStrategy: number,
-  amount: BN,
-  confidence: number,
-  reasoningHash: Buffer,
-): BuiltIx {
-  const [decision] = decisionPda(vault, decisionId);
-  const data = Buffer.concat([
-    discriminator("ai_allocate"),
-    Buffer.from([targetStrategy]),
-    amount.toArrayLike(Buffer, "le", 8),
-    Buffer.from([confidence]),
-    reasoningHash,
-  ]);
-  const ix = new TransactionInstruction({
-    programId: PROGRAM_ID,
-    keys: [
-      { pubkey: oracle, isSigner: true, isWritable: false },
-      { pubkey: payer, isSigner: true, isWritable: true },
-      { pubkey: vault, isSigner: false, isWritable: true },
-      { pubkey: decision, isSigner: false, isWritable: true },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    data,
+const addressEncoder = getAddressEncoder();
+const u64Encoder = getU64Encoder();
+
+async function vaultPda(mint: Address): Promise<Address> {
+  const [pda] = await getProgramDerivedAddress({
+    programAddress: PROGRAM_ID,
+    seeds: [new TextEncoder().encode("vault"), addressEncoder.encode(mint)],
   });
-  return { ix, decisionPda: decision };
+  return pda;
 }
 
-function buildAiRebalanceIx(
-  vault: PublicKey,
-  decisionId: BN,
-  oracle: PublicKey,
-  payer: PublicKey,
-  targetStrategy: number,
-  confidence: number,
-  reasoningHash: Buffer,
-): BuiltIx {
-  const [decision] = decisionPda(vault, decisionId);
-  const data = Buffer.concat([
-    discriminator("ai_rebalance"),
-    Buffer.from([targetStrategy]),
-    Buffer.from([confidence]),
-    reasoningHash,
-  ]);
-  const ix = new TransactionInstruction({
-    programId: PROGRAM_ID,
-    keys: [
-      { pubkey: oracle, isSigner: true, isWritable: false },
-      { pubkey: payer, isSigner: true, isWritable: true },
-      { pubkey: vault, isSigner: false, isWritable: true },
-      { pubkey: decision, isSigner: false, isWritable: true },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+async function decisionPda(vault: Address, id: bigint): Promise<Address> {
+  const [pda] = await getProgramDerivedAddress({
+    programAddress: PROGRAM_ID,
+    seeds: [
+      new TextEncoder().encode("ai-vault-decision"),
+      addressEncoder.encode(vault),
+      u64Encoder.encode(id),
     ],
-    data,
   });
-  return { ix, decisionPda: decision };
-}
-
-function buildAiRiskOffIx(
-  vault: PublicKey,
-  decisionId: BN,
-  oracle: PublicKey,
-  payer: PublicKey,
-  confidence: number,
-  reasoningHash: Buffer,
-): BuiltIx {
-  const [decision] = decisionPda(vault, decisionId);
-  const data = Buffer.concat([
-    discriminator("ai_risk_off"),
-    Buffer.from([confidence]),
-    reasoningHash,
-  ]);
-  const ix = new TransactionInstruction({
-    programId: PROGRAM_ID,
-    keys: [
-      { pubkey: oracle, isSigner: true, isWritable: false },
-      { pubkey: payer, isSigner: true, isWritable: true },
-      { pubkey: vault, isSigner: false, isWritable: true },
-      { pubkey: decision, isSigner: false, isWritable: true },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    data,
-  });
-  return { ix, decisionPda: decision };
+  return pda;
 }
 
 // Read vault.total_ai_decisions from chain (offset depends on Vault layout).
 // Layout: 8 disc + 32 admin + 32 oracle + 32 mint + 32 vta + 8 deposits +
 //         8 shares + 8 ai_decisions ...   → ai_decisions at offset 8+128+16 = 152
 async function fetchVaultDecisionId(
-  conn: Connection,
-  vault: PublicKey,
-): Promise<BN> {
-  const acct = await conn.getAccountInfo(vault);
-  if (!acct) throw new Error(`Vault account not found: ${vault.toBase58()}`);
-  const slice = acct.data.subarray(152, 160);
-  return new BN(slice, "le");
+  rpc: ReturnType<typeof createSolanaRpc>,
+  vault: Address,
+): Promise<bigint> {
+  const acct = await fetchEncodedAccount(rpc as any, vault);
+  if (!acct.exists) throw new Error(`Vault account not found: ${vault}`);
+  return readU64LE(acct.data, 152);
+}
+
+function buildAiInstruction(
+  fn: "ai_allocate" | "ai_rebalance" | "ai_risk_off",
+  args: {
+    vault: Address;
+    decision: Address;
+    oracle: Address;
+    targetStrategy?: number;
+    amount?: bigint;
+    confidence: number;
+    reasoningHash: Uint8Array;
+  },
+): Instruction {
+  let data: Uint8Array;
+  if (fn === "ai_allocate") {
+    data = concatBytes(
+      discriminator("ai_allocate"),
+      new Uint8Array([args.targetStrategy!]),
+      u64LE(args.amount!),
+      new Uint8Array([args.confidence]),
+      args.reasoningHash,
+    );
+  } else if (fn === "ai_rebalance") {
+    data = concatBytes(
+      discriminator("ai_rebalance"),
+      new Uint8Array([args.targetStrategy!]),
+      new Uint8Array([args.confidence]),
+      args.reasoningHash,
+    );
+  } else {
+    data = concatBytes(
+      discriminator("ai_risk_off"),
+      new Uint8Array([args.confidence]),
+      args.reasoningHash,
+    );
+  }
+  return {
+    programAddress: PROGRAM_ID,
+    accounts: [
+      { address: args.oracle, role: READONLY_SIGNER },
+      { address: args.oracle, role: WRITABLE_SIGNER },
+      { address: args.vault, role: WRITABLE },
+      { address: args.decision, role: WRITABLE },
+      { address: SYSTEM_PROGRAM_ADDRESS, role: READONLY },
+    ],
+    data,
+  };
 }
 
 // ── Main loop ──────────────────────────────────────────────────────────────
 
 async function tick() {
-  const conn = new Connection(RPC_URL, "confirmed");
-  const oracle = loadKeypair(ORACLE_KP_PATH);
-  const [vault] = vaultPda(ASSET_MINT);
+  const rpc = createSolanaRpc(RPC_URL);
+  const rpcSubscriptions = createSolanaRpcSubscriptions(RPC_URL.replace(/^http/, "ws"));
+  const oracle = await loadOracleSigner(ORACLE_KP_PATH);
+  const vault = await vaultPda(ASSET_MINT);
 
-  console.log(`[${new Date().toISOString()}] tick — vault=${vault.toBase58()}`);
+  console.log(`[${new Date().toISOString()}] tick — vault=${vault}`);
 
   const snapshot = await snapshotMarket();
   console.log("  snapshot:", snapshot);
@@ -306,57 +308,64 @@ async function tick() {
     return;
   }
 
-  const decisionId = await fetchVaultDecisionId(conn, vault);
+  const decisionId = await fetchVaultDecisionId(rpc, vault);
+  const decisionAddr = await decisionPda(vault, decisionId);
 
-  let built: BuiltIx;
+  let ix: Instruction;
   switch (decision.action) {
     case "allocate":
-      built = buildAiAllocateIx(
-        vault,
-        decisionId,
-        oracle.publicKey,
-        oracle.publicKey,
-        targetIdx,
-        new BN(Math.floor(decision.amount_usdc * 1_000_000)), // USDC = 6 dec
-        decision.confidence,
+      ix = buildAiInstruction("ai_allocate", {
+        vault, decision: decisionAddr, oracle: oracle.address,
+        targetStrategy: targetIdx,
+        amount: BigInt(Math.floor(decision.amount_usdc * 1_000_000)), // USDC = 6 dec
+        confidence: decision.confidence,
         reasoningHash,
-      );
+      });
       break;
     case "rebalance":
-      built = buildAiRebalanceIx(
-        vault,
-        decisionId,
-        oracle.publicKey,
-        oracle.publicKey,
-        targetIdx,
-        decision.confidence,
+      ix = buildAiInstruction("ai_rebalance", {
+        vault, decision: decisionAddr, oracle: oracle.address,
+        targetStrategy: targetIdx,
+        confidence: decision.confidence,
         reasoningHash,
-      );
+      });
       break;
     case "risk_off":
-      built = buildAiRiskOffIx(
-        vault,
-        decisionId,
-        oracle.publicKey,
-        oracle.publicKey,
-        decision.confidence,
+      ix = buildAiInstruction("ai_risk_off", {
+        vault, decision: decisionAddr, oracle: oracle.address,
+        confidence: decision.confidence,
         reasoningHash,
-      );
+      });
       break;
     default:
       console.log("  → unsupported action");
       return;
   }
 
-  const tx = new Transaction().add(built.ix);
-  tx.feePayer = oracle.publicKey;
-  tx.recentBlockhash = (await conn.getLatestBlockhash()).blockhash;
-  tx.sign(oracle);
+  const { value: latestBlockhash } = await rpc
+    .getLatestBlockhash({ commitment: "confirmed" })
+    .send();
 
-  const sig = await conn.sendRawTransaction(tx.serialize());
-  await conn.confirmTransaction(sig, "confirmed");
+  const txMessage = pipe(
+    createTransactionMessage({ version: 0 }),
+    (m) => setTransactionMessageFeePayer(oracle.address, m),
+    (m) => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, m),
+    (m) => appendTransactionMessageInstructions([ix], m),
+  );
+
+  const compiled = compileTransaction(txMessage);
+  const signed = await signTransaction([(oracle as any).keyPair], compiled);
+  assertIsTransactionWithinSizeLimit(signed);
+
+  const sendAndConfirm = sendAndConfirmTransactionFactory({
+    rpc: rpc as any,
+    rpcSubscriptions: rpcSubscriptions as any,
+  });
+  await sendAndConfirm(signed, { commitment: "confirmed" });
+  const sig = getSignatureFromTransaction(signed);
+
   console.log(`  ✓ submitted ${decision.action} → strategy=${STRATEGY_NAME[targetIdx]} sig=${sig}`);
-  console.log(`    decision PDA: ${built.decisionPda.toBase58()}`);
+  console.log(`    decision PDA: ${decisionAddr}`);
 }
 
 async function main() {
