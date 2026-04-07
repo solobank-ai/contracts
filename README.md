@@ -155,19 +155,45 @@ Once deployed, every wallet talks to the vault via:
 | MCP (Claude / agents) | `solobank_vault_info`, `solobank_vault_position`, `solobank_vault_decisions`, `solobank_vault_deposit`, `solobank_vault_withdraw` |
 | SDK | `import { vaultDeposit, vaultWithdraw, getVault, getRecentDecisions } from '@solobank/sdk'` |
 
-## Live demo
+## Live demo (devnet)
 
-After running the demo tick the agent prints a link like:
+The full happy path is deployed and verifiable on Solana devnet right now.
+Click any link to see the actual on-chain account / transaction.
 
+**Program:** [`74Er4xSaRKQbDL1X8UUjYP9M4vXNZUZR36qeMUdH7RU9`](https://solscan.io/account/74Er4xSaRKQbDL1X8UUjYP9M4vXNZUZR36qeMUdH7RU9?cluster=devnet)
+**Vault PDA:** [`DhSrRebGTh6arqLSkXaAjXeN9nggQXT1sk413r7uyRd6`](https://solscan.io/account/DhSrRebGTh6arqLSkXaAjXeN9nggQXT1sk413r7uyRd6?cluster=devnet)
+**Asset mint (test USDC):** `2GUgqi7x96YNfag52mpPa5ug8egvux2aidabbQnp3sin`
+**AI Oracle:** [`5DZBWHU97cVowTBq6CpzpL6TTLYy7kSZY2AxT8KDPFcn`](https://solscan.io/account/5DZBWHU97cVowTBq6CpzpL6TTLYy7kSZY2AxT8KDPFcn?cluster=devnet)
+
+| # | Step | Tx |
+|---|---|---|
+| 1 | Program deploy | [`4etYAH…YTwQ`](https://solscan.io/tx/4etYAHW4QmdBUS9U8sVNksopniAbRSdFWtER4mk7p6g6Jux6kRXmhpLw8DWrxQpLh72P7genQX9ajR7dJPziYTwQ?cluster=devnet) |
+| 2 | `initialize_vault` | [`54V2Gi…3r6K`](https://solscan.io/tx/54V2Gidrc674579hmbGCBabP88tRaQqc7ht24s9ez9wcrjPSjqyeDwLMvqtQ5DGrGXer464Sv9t6KT6WeqBF3r6K?cluster=devnet) |
+| 3 | `deposit` 1000 USDC | [`55ZKz7…jDh`](https://solscan.io/tx/55ZKz7PpeLDZTRfGGvozwebcM1r52sramjUwK1MymJbnUQL9mNtWKR3KaJMTcwHdNw9RcEY43LoXavNRJ53gEjDh?cluster=devnet) |
+| 4 | AI Oracle `ai_allocate` 500 → KAMINO_USDC (conf 87) | [`31NVrL…ykHm`](https://solscan.io/tx/31NVrLnQ5JpdVr6ogojRC6vEqCMTScGZdKpFt9M7P28jGfRw2soc52prfpY6Q3jXuPCePifixcAR4RnoWdhGykHm?cluster=devnet) |
+| 5 | AI Oracle `ai_rebalance` → MARGINFI_USDC (conf 91) | [`39TZ2B…swg`](https://solscan.io/tx/39TZ2B1zw1hQrJVVvzP5STu234xPDLLhQ3as2cM2iDUbV4ePNEX8bHEB6ww2hEy1QsGA6t9BfVVwyckCVh1twswg?cluster=devnet) |
+| 6 | AI Oracle `ai_risk_off` → IDLE (conf 95) | [`2xUquD…Tv2M`](https://solscan.io/tx/2xUquDJgfkBWxMkgEigUurM1XpUdrKxyUFkYTfPuUKhPg28QtuWZbWPDhtqxxqjp5EVHCYYMB8ry4xxoWQJNTv2M?cluster=devnet) |
+
+The three AI decisions are stored as PDA accounts and are independently
+verifiable by anyone with the program ID:
+
+| Decision id | PDA | Reasoning hash (sha256) |
+|---|---|---|
+| 0 | [`HVUxGv…Xhca`](https://solscan.io/account/HVUxGvffy6K71c6Fm5JRwg7eh2BfMzBZuz99ACGeXhca?cluster=devnet) | `e90de2291338e3403c644008d64634cf6e89ffa36ca10a2cf5b417ddd9141ef8` |
+| 1 | [`3gNkv6…8eWh`](https://solscan.io/account/3gNkv6d2mEaH9MUuk9RfUciNfXJ87HnouYtoBdY38eWh?cluster=devnet) | `70ded1c48bbf12e57cc88ffdc02462986a9a15dc2579b575a7aa2a1fd356fd6e` |
+| 2 | [`FPqk3r…q24L`](https://solscan.io/account/FPqk3r42uFE4NvhWZFqgafwnMYehAox2XBCCmQmTq24L?cluster=devnet) | `b77f616f656f99d59101022823e4ae886b2748deb3e82e74f0e55baa8b5caeea` |
+
+To verify a hash off-chain (e.g. for decision 0):
+
+```bash
+echo -n "Kamino USDC APY at 6.42% with \$12.4M utilisation depth — best risk-adjusted return right now. SOL volatility 24h at 2.3% (below 5% threshold). Allocating 500 USDC of liquid balance." \
+  | sha256sum
+# → e90de2291338e3403c644008d64634cf6e89ffa36ca10a2cf5b417ddd9141ef8
 ```
-✓ confirmed
-Signature: <devnet tx signature>
-Solscan  : https://solscan.io/tx/<sig>?cluster=devnet
-```
 
-Open it. You'll see the `AiDecision` PDA being created with the exact
-strategy, amount, confidence, and reasoning hash from the script — the same
-data the on-chain program enforced.
+Open any of the AI Oracle txs above. You'll see the `AiDecision` PDA being
+created with the exact strategy, amount, confidence, and reasoning hash from
+the script — the same data the on-chain program enforced.
 
 ## Hackathon mapping
 
