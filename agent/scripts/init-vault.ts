@@ -141,24 +141,12 @@ async function main() {
     process.exit(1);
   }
 
-  // Generate a fresh keypair for the vault token account; the Anchor program
-  // takes care of the SPL Token init step inside `initialize_vault`.
+  // Generate a fresh keypair for the vault token account. Anchor's `init`
+  // constraint with `token::mint = ...` does BOTH SystemProgram::CreateAccount
+  // and SPL Token initialize_account, so we just pass an unused address and
+  // let the program do the work.
   const vaultTokenAccount = await generateKeyPairSigner();
   console.log(`Vault TA     : ${vaultTokenAccount.address}`);
-
-  // Pre-create the token account so the program's `init` constraint can
-  // attach to a System-owned, rent-exempt account of the right size.
-  const lamports = await rpc
-    .getMinimumBalanceForRentExemption(SPL_TOKEN_ACCOUNT_SIZE)
-    .send();
-
-  const createTaIx = getCreateAccountInstruction({
-    payer: admin,
-    newAccount: vaultTokenAccount,
-    lamports,
-    space: SPL_TOKEN_ACCOUNT_SIZE,
-    programAddress: TOKEN_PROGRAM_ADDRESS,
-  });
 
   // initialize_vault instruction:
   //   discriminator(8) + ai_oracle: Pubkey(32)
@@ -190,7 +178,7 @@ async function main() {
     createTransactionMessage({ version: 0 }),
     (m) => setTransactionMessageFeePayer(admin.address, m),
     (m) => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, m),
-    (m) => appendTransactionMessageInstructions([createTaIx, initIx], m),
+    (m) => appendTransactionMessageInstructions([initIx], m),
   );
 
   const compiled = compileTransaction(txMessage);
