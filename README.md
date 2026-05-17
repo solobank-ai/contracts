@@ -43,7 +43,7 @@ Smart contracts that turn an AI agent into a first-class participant on Solana.
 
 ### 1. `contracts` — Treasury with AI fees
 
-The original treasury collected static fees on save / borrow / swap (10/5/10 bps).
+The treasury collects static fees on save / borrow / swap (10/10/10 bps).
 The AI extension adds:
 
 - **`ai_update_fees(save_bps, borrow_bps, swap_bps, confidence, reasoning_hash)`**

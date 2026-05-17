@@ -7,7 +7,7 @@ declare_id!("9xpLht8FtpZgEGFpHpC6W3pupoHbfTsBMytj7CqxJ8us");
 
 /// Fee rates in basis points (1 bps = 0.01%)
 pub const SAVE_FEE_BPS: u16 = 10;    // 0.1% on lend/save
-pub const BORROW_FEE_BPS: u16 = 5;   // 0.05% on borrow
+pub const BORROW_FEE_BPS: u16 = 10;  // 0.1% on borrow
 pub const SWAP_FEE_BPS: u16 = 10;    // 0.1% on swap
 pub const BPS_DENOMINATOR: u64 = 10_000;
 pub const MAX_FEE_BPS: u16 = 500;    // 5% max
